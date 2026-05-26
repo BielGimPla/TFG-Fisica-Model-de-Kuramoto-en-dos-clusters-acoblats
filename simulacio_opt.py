@@ -1,20 +1,3 @@
-"""
-simulacio.py — Script principal de barrida de K paral·lelitzada
-================================================================
-
-Canvis respecte la versió original:
-  - Els loops (P → K → repeticions) s'han reestructurat:
-      · El loop sobre K és ara paral·lel (barrida_K_parallel)
-      · Les repeticions s'acumulen en una llista i es mitjanen al final
-      · El model (K_ij, k_mean) es construeix UNA sola vegada per P,
-        no N_repeticions × N_Ks vegades com abans
-  - Ruta de desament parametritzada (ja no hardcodejada)
-  - Guard __main__ obligatori per a multiprocessing en Windows/macOS
-
-Ús:
-    python simulacio_opt.py --output_dir ./resultats
-"""
-
 import os
 import argparse
 
