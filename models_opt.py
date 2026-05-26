@@ -1,14 +1,3 @@
-"""
-models.py — Model de Kuramoto optimitzat
-=========================================
-
-Optimitzacions aplicades respecte la versió anterior:
-  1. Paral·lelització de la barrida de K amb multiprocessing (barrida_K_parallel)
-  2. Model mean-field analític O(N), sense matriu N×N
-  3. Detecció de convergència en simulacio() → para abans si r s'estabilitza
-  4. Mod in-place (np.mod(..., out=theta)) per evitar còpies innecessàries
-"""
-
 import os
 import numpy as np
 import matplotlib.pyplot as plt
