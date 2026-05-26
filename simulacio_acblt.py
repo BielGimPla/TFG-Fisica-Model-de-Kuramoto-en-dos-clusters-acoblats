@@ -1,12 +1,3 @@
-"""
-Simulacio de dos clusters de Kuramoto acoblats.
-
-Cada cluster te acoblament intern mean-field i els dos clusters es connecten
-amb un nombre fix d'unions entre parelles d'oscil.ladors. El script fa una
-barrida sobre el nombre d'unions, repeteix la simulacio amb condicions
-inicials aleatories i desa resultats en fitxers txt.
-"""
-
 import argparse
 import os
 import re
