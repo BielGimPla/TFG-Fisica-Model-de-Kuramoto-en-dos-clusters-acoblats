@@ -121,18 +121,18 @@ def generar_valors_graella_densa(args):
 # ===========================================================================
 # UTILITATS
 # ===========================================================================
-
 def crear_interconnexions(N1, N2, n_unions, rng):
     """
     Crea exactament n_unions connexions entre els dos clusters.
 
-    Cada oscil.lador pot participar com a maxim en una connexio inter-cluster,
-    de manera que no hi ha nodes repetits a cap dels dos clusters.
+    Les connexions es trien com un subconjunt de la configuracio mean-field
+    completa entre clusters: qualsevol oscil.lador pot tenir multiples unions,
+    pero una mateixa parella (i, j) nomes pot apareixer una vegada.
 
     Retorna dos arrays i_idx, j_idx. Cada parella indica una unio entre
     l'oscil.lador i del cluster 1 i l'oscil.lador j del cluster 2.
     """
-    max_unions = min(N1, N2)
+    max_unions = N1 * N2
     if n_unions < 0 or n_unions > max_unions:
         raise ValueError(f"n_unions ha d'estar entre 0 i {max_unions}")
 
@@ -142,9 +142,9 @@ def crear_interconnexions(N1, N2, n_unions, rng):
             np.empty(0, dtype=np.int64),
         )
 
-    i_idx = rng.choice(N1, size=n_unions, replace=True)
-    j_idx = rng.choice(N2, size=n_unions, replace=True)
-    rng.shuffle(j_idx)
+    parelles = rng.choice(max_unions, size=n_unions, replace=False)
+    i_idx = parelles // N2
+    j_idx = parelles % N2
 
     return i_idx.astype(np.int64), j_idx.astype(np.int64)
 
