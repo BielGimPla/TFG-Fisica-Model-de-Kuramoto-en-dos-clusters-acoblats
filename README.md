@@ -12,7 +12,7 @@ resultats dels quals es comparen amb resultats teòrics, i en el cas de dos clú
 
 # Generar resultats del treball
 
-Les comandes de `bash` per generar els resultats presentats als treballs són:
+Cal recordar que els resultats obtinguts depenen de les condicions inicials. Per tant, és probable que els resultats obtinguts no siguin de tot comparables amb els presentats al treball. Les comandes de `bash` per generar els resultats presentats als treballs són:
 ## Mean field: r(K) per N=50
 ```bash
 python3 simulacio_opt.py --N 50 --output_dir resultats/mean_field_N50
