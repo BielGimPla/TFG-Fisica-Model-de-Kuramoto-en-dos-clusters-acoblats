@@ -5,22 +5,13 @@ from mpl_toolkits.axes_grid1.inset_locator import inset_axes, mark_inset
 from tqdm import tqdm
 from multiprocessing import Pool
 
-
-# Funcions d'utilitat
-
 def kura_mean(x, omega, K):
-    """
-    Model mean field analític usant el paràmetre d'ordre.
-    """
     z = np.mean(np.exp(1j * x))
     r = np.abs(z)
     psi = np.angle(z)
     return omega + K * r * np.sin(psi - x)
 
 def rk4(x, f, h, K, omega):
-    """
-    Runge-Kutta d'ordre 4 (RK4 clàssic). f té arguments f(x, omega, K).
-    """
     k1 = f(x, omega, K)
     k2 = f(x + h / 2 * k1, omega, K)
     k3 = f(x + h / 2 * k2, omega, K)
@@ -28,21 +19,11 @@ def rk4(x, f, h, K, omega):
     return x + (h / 6) * (k1 + 2 * k2 + 2 * k3 + k4)
 
 
-# Funcions de simulació
-
 def simulacio(K, theta, f, h, T_final, omega,
-              show_progress=False, temps_hist=False,  
+              show_progress=False, temps_hist=False,
               tol=1e-4, check_every=50, T_min=None,
               K_convergencia_min=None, T_convergencia_max=None,
-              tol_slope=None):
-    """
-    Simula el model de Kuramoto amb RK4.
-
-    Si temps_hist=True, la simulacio pot allargar-se mes enlla de T_final
-    fins trobar t_conv o arribar a T_convergencia_max.
-    """
-    tol_r = tol        # tolerance for fluctuations in r
-
+              tol_slope=None, K_parada_anticipada_min=None):
     if temps_hist:
         r_hist = []
         theta = np.asarray(theta, dtype=np.float64)
@@ -58,23 +39,35 @@ def simulacio(K, theta, f, h, T_final, omega,
             T_convergencia_max = 10 * T_final
 
         buscar_mes_enlla = K_convergencia_min is not None and K > K_convergencia_min
+        parada_anticipada_permesa = buscar_mes_enlla
+        if K_parada_anticipada_min is not None:
+            parada_anticipada_permesa = parada_anticipada_permesa and K >= K_parada_anticipada_min
+
         window = 20
         window_time = (window - 1) * check_every * h
-        tol_slope_eff = tol_slope if tol_slope is not None else tol_r / window_time
+        tol_slope_eff = tol_slope if tol_slope is not None else tol / window_time
+        r_est_esperat = None
+        if buscar_mes_enlla and K_convergencia_min > 0:
+            r_est_esperat = np.sqrt(max(0.0, 1.0 - K_convergencia_min / K))
 
         while t < T_final or (buscar_mes_enlla and t_conv is None and t < T_convergencia_max):
             z = np.mean(np.exp(1j * theta))
             r_now = np.abs(z)
             r_hist.append(r_now)
 
-            if t >= T_min and i % check_every == 0 and t_conv is None:
+            if parada_anticipada_permesa and t >= T_min and i % check_every == 0 and t_conv is None:
                 vals = r_hist[max(0, i - (window - 1) * check_every): i + 1: check_every]
 
                 if len(vals) >= window:
                     amplitude = np.max(vals) - np.min(vals)
                     slope = abs(vals[-1] - vals[0]) / ((len(vals) - 1) * check_every * h)
+                    r_window = float(np.mean(vals))
+                    prou_a_prop_del_plateau = (
+                        r_est_esperat is None
+                        or r_window >= max(0.0, r_est_esperat - 3.0 * tol)
+                    )
 
-                    if amplitude < tol_r and slope < tol_slope_eff:
+                    if amplitude < tol and slope < tol_slope_eff and prou_a_prop_del_plateau:
                         t_conv = t - (window - 1) * check_every * h
 
             theta = rk4(theta, f, h, K, omega)
@@ -86,55 +79,39 @@ def simulacio(K, theta, f, h, T_final, omega,
         z = np.mean(np.exp(1j * theta))
         r_hist.append(np.abs(z))
 
-        return np.array(r_hist), t_conv
-    
-    else:
-        n_steps = int(T_final / h)
-        r_hist = np.empty(n_steps + 1, dtype=np.float32)
+        return np.array(r_hist)
 
-        theta = np.asarray(theta, dtype=np.float64)
-        omega = np.asarray(omega, dtype=np.float64)
+    n_steps = int(T_final / h)
+    r_hist = np.empty(n_steps + 1, dtype=np.float32)
 
-        iterator = tqdm(range(n_steps), dynamic_ncols=True, leave=False) if show_progress else range(n_steps)
+    theta = np.asarray(theta, dtype=np.float64)
+    omega = np.asarray(omega, dtype=np.float64)
 
-        for i in iterator:
-            z = np.mean(np.exp(1j * theta))
-            r_hist[i] = np.abs(z)
+    iterator = tqdm(range(n_steps), dynamic_ncols=True, leave=False) if show_progress else range(n_steps)
 
-            theta = rk4(theta, f, h, K, omega)
-            np.mod(theta, 2 * np.pi, out=theta)    
-
+    for i in iterator:
         z = np.mean(np.exp(1j * theta))
-        r_hist[-1] = np.abs(z)
-        return r_hist
+        r_hist[i] = np.abs(z)
+
+        theta = rk4(theta, f, h, K, omega)
+        np.mod(theta, 2 * np.pi, out=theta)    
+
+    z = np.mean(np.exp(1j * theta))
+    r_hist[-1] = np.abs(z)
+    return r_hist
 
 
 def _worker_simulacio(args):
-    """
-    Funció worker per a multiprocessing.
-    """
     (K, theta0, f, h, T_final, omega, temps_hist, tol, check_every, T_min,
-     K_convergencia_min, T_convergencia_max, tol_slope) = args
+     K_convergencia_min, T_convergencia_max, tol_slope, K_parada_anticipada_min) = args
 
+    r_hist = simulacio(K, theta0, f, h, T_final, omega, temps_hist=temps_hist, show_progress=False, tol=tol, check_every=check_every, T_min=T_min, K_convergencia_min=K_convergencia_min, T_convergencia_max=T_convergencia_max, tol_slope=tol_slope, K_parada_anticipada_min=K_parada_anticipada_min)
     if temps_hist:
-        r_hist, t_conv = simulacio(K, theta0, f, h, T_final, omega, temps_hist=temps_hist, show_progress=False,
-                       tol=tol, check_every=check_every, T_min=T_min,
-                       K_convergencia_min=K_convergencia_min,
-                       T_convergencia_max=T_convergencia_max,
-                       tol_slope=tol_slope)
-        return K, r_hist, t_conv
+        return K, r_hist, None
 
-
-    else: 
-        r_hist = simulacio(K, theta0, f, h, T_final, omega, temps_hist=temps_hist, show_progress=False,
-                       tol=tol, check_every=check_every, T_min=T_min,
-                       K_convergencia_min=K_convergencia_min,
-                       T_convergencia_max=T_convergencia_max,
-                       tol_slope=tol_slope)
-        # Valor estacionari: mit_convtjana temporal del 20% final
-        n = len(r_hist)
-        r_final = float(np.mean(r_hist[int(0.8 * n):]))
-        return K, r_final, None
+    n = len(r_hist)
+    r_final = float(np.mean(r_hist[int(0.8 * n):]))
+    return K, r_final, None
     
 
 
@@ -142,37 +119,60 @@ def barrida_K_parallel(Ks, theta0, f, h, T_final, omega,
                        tol=1e-4, check_every=50, T_min=None,
                        temps_hist=False,
                        K_convergencia_min=None, T_convergencia_max=None,
-                       tol_slope=None):
-    """
-    Barrida paral·lela explícita del paràmetre d'acoblament K.
-    """
+                       tol_slope=None, K_parada_anticipada_min=None):
     n_workers = os.cpu_count()
 
     args_list = [
             (K, theta0.copy(), f, h, T_final, omega, temps_hist, tol, check_every, T_min,
-             K_convergencia_min, T_convergencia_max, tol_slope)
+             K_convergencia_min, T_convergencia_max, tol_slope, K_parada_anticipada_min)
             for K in Ks
         ]
 
     with Pool(n_workers) as pool:
         resultats = list(pool.imap(_worker_simulacio, args_list))
 
-    if temps_hist:
-        r_hists = {K: r_final for K, r_final, _ in resultats}
-        t_conv = {K: x for K, _, x in resultats}
-        return r_hists, t_conv
-    
-    else: 
-        r_finals = {K: r_final for K, r_final, _ in resultats}
-        return r_finals
+    return {K: r_final for K, r_final, _ in resultats}
 
 
-# Funcions necessàries per quan N=2
+def detectar_t_convergencia(r_hist, h, tol=1e-4, check_every=50, T_min=None,
+                            tol_slope=None, final_fraction=0.2,
+                            plateau_tol_factor=3.0):
+    r_hist = np.asarray(r_hist, dtype=float)
+
+    if T_min is None:
+        T_min = (len(r_hist) - 1) * h / 4
+
+    window = 20
+    window_time = (window - 1) * check_every * h
+    tol_slope_eff = tol_slope if tol_slope is not None else tol / window_time
+    i_plateau = int((1.0 - final_fraction) * len(r_hist))
+    r_plateau = float(np.mean(r_hist[i_plateau:]))
+    tol_plateau = plateau_tol_factor * tol
+
+    for i in range(0, len(r_hist), check_every):
+        t = i * h
+        if t < T_min:
+            continue
+
+        vals = r_hist[max(0, i - (window - 1) * check_every): i + 1: check_every]
+        if len(vals) < window:
+            continue
+
+        amplitude = np.max(vals) - np.min(vals)
+        slope = abs(vals[-1] - vals[0]) / ((len(vals) - 1) * check_every * h)
+        r_window = float(np.mean(vals))
+
+        if (
+            amplitude < tol
+            and slope < tol_slope_eff
+            and abs(r_window - r_plateau) < tol_plateau
+        ):
+            return t - (window - 1) * check_every * h
+
+    return None
+
 
 def teoria_dos_osciladors(Ks, omega1, omega2):
-    """
-    Solucio teorica estacionaria per dos oscil.ladors acoblats.
-    """
     Ks = np.asarray(Ks, dtype=float)
     delta_omega = omega1 - omega2
     Kc = abs(delta_omega)
@@ -194,11 +194,6 @@ def teoria_dos_osciladors(Ks, omega1, omega2):
 
 
 def simulacio_dos_osciladors(K, omega1, omega2, theta0=None, h=0.01, T_final=100):
-    """
-    Simula directament dos oscil.ladors:
-        theta1_dot = omega1 + K/2 sin(theta2 - theta1)
-        theta2_dot = omega2 + K/2 sin(theta1 - theta2)
-    """
     if theta0 is None:
         theta = np.random.uniform(0, 2 * np.pi, 2)
     else:
@@ -231,9 +226,6 @@ def simulacio_dos_osciladors(K, omega1, omega2, theta0=None, h=0.01, T_final=100
 
 
 def _worker_dos_osciladors(args):
-    """
-    Worker multiprocessing per a una parella (K, repeticio).
-    """
     K, omega1, omega2, theta0, h, T_final, fraccio_final, seed = args
 
     theta0_rep = theta0
@@ -254,10 +246,6 @@ def _worker_dos_osciladors(args):
 def barrida_dos_osciladors(Ks, omega1, omega2, theta0=None,
                            h=0.01, T_final=100, fraccio_final=0.2,
                            show_progress=False, repeticions=20):
-    """
-    Simula una barrida de K per dos oscil.ladors i retorna valors estacionaris
-    estimats fent mitjana temporal de la part final.
-    """
     n_workers = os.cpu_count()
 
     seeds = np.random.SeedSequence().generate_state(len(Ks) * repeticions)
@@ -265,35 +253,19 @@ def barrida_dos_osciladors(Ks, omega1, omega2, theta0=None,
     seed_idx = 0
     for K in Ks:
         for _ in range(repeticions):
-            args_list.append(
-                (K, omega1, omega2, theta0, h, T_final, fraccio_final, int(seeds[seed_idx]))
-            )
+            args_list.append((K, omega1, omega2, theta0, h, T_final, fraccio_final, int(seeds[seed_idx])))
             seed_idx += 1
 
     if n_workers == 1:
         iterator = map(_worker_dos_osciladors, args_list)
         if show_progress:
-            iterator = tqdm(
-                iterator,
-                total=len(args_list),
-                desc="Dos oscil.ladors",
-                unit="sim",
-                dynamic_ncols=True,
-                leave=False
-            )
+            iterator = tqdm(iterator, total=len(args_list), desc="Dos oscil.ladors", unit="sim", dynamic_ncols=True, leave=False)
         resultats = list(iterator)
     else:
         with Pool(n_workers) as pool:
             iterator = pool.imap(_worker_dos_osciladors, args_list)
             if show_progress:
-                iterator = tqdm(
-                    iterator,
-                    total=len(args_list),
-                    desc="Dos oscil.ladors",
-                    unit="sim",
-                    dynamic_ncols=True,
-                    leave=False
-                )
+                iterator = tqdm(iterator, total=len(args_list), desc="Dos oscil.ladors", unit="sim", dynamic_ncols=True, leave=False)
             resultats = list(iterator)
 
     per_K = {K: ([], []) for K in Ks}
@@ -311,55 +283,21 @@ def barrida_dos_osciladors(Ks, omega1, omega2, theta0=None,
         r_sim_std.append(float(np.std(r_reps)))
         delta_sim_mitja.append(float(np.angle(np.mean(np.exp(1j * np.asarray(delta_reps))))))
 
-    return (
-        np.asarray(r_sim_mitja),
-        np.asarray(r_sim_std),
-        np.asarray(delta_sim_mitja)
-    )
+    return np.asarray(r_sim_mitja), np.asarray(r_sim_std), np.asarray(delta_sim_mitja)
 
-
-# Funcions de plotting the resultats
 
 def plot_comparacio_dos_osciladors(Ks, omega1, omega2, theta0=None,
                                    h=0.01, T_final=100, output_path=None,
                                    show_progress=False, repeticions=20):
-    """
-    Compara teoria i simulacio per dos oscil.ladors: r estacionari en funcio de K.
-    """
     Ks = np.asarray(Ks, dtype=float)
     locked, _, r_theory, Kc = teoria_dos_osciladors(Ks, omega1, omega2)
-    r_sim, r_sim_std, _ = barrida_dos_osciladors(
-        Ks, omega1, omega2, theta0=theta0, h=h, T_final=T_final,
-        show_progress=show_progress, repeticions=repeticions,
-    )
+    r_sim, r_sim_std, _ = barrida_dos_osciladors(Ks, omega1, omega2, theta0=theta0, h=h, T_final=T_final, show_progress=show_progress, repeticions=repeticions)
 
     fig, ax = plt.subplots(figsize=(8, 5))
 
-    ax.plot(
-        Ks[locked],
-        r_theory[locked],
-        linewidth=2.5,
-        label="Teoria",
-        alpha=0.9,
-        color="tab:green",
-        zorder=3
-    )
+    ax.plot(Ks[locked], r_theory[locked], linewidth=2.5, label="Teoria", alpha=0.9, color="tab:green", zorder=3)
 
-    ax.errorbar(
-        Ks,
-        r_sim,
-        yerr=r_sim_std,
-        fmt="o",
-        ms=6,
-        capsize=3,
-        capthick=1,
-        elinewidth=1,
-        color="tab:orange",
-        markeredgecolor="tab:orange",
-        markerfacecolor="none",
-        label="Simulació",
-        zorder=4
-    )
+    ax.errorbar(Ks, r_sim, yerr=r_sim_std, fmt="o", ms=6, capsize=3, capthick=1, elinewidth=1, color="tab:orange", markeredgecolor="tab:orange", markerfacecolor="none", label="Simulació", zorder=4)
 
     ax.axvline(Kc, color="0.35", linestyle="--", lw=1, label=fr"$K_c={Kc:.3g}$", zorder=2)
 
@@ -369,25 +307,18 @@ def plot_comparacio_dos_osciladors(Ks, omega1, omega2, theta0=None,
     ax.set_xlim(0, max(Ks))
     ax.set_ylim(0, 1.05)
     ax.set_yticks(np.linspace(0, 1, 6))
-    ax.legend(
-        bbox_to_anchor=(1.02, 1),
-        loc="upper left",
-        borderaxespad=0,
-        fontsize=9
-    )
+    ax.legend(bbox_to_anchor=(1.02, 1), loc="upper left", borderaxespad=0, fontsize=9)
     ax.grid(alpha=0.3)
     plt.tight_layout()
 
     if output_path is not None:
         plt.savefig(output_path, dpi=300, bbox_inches="tight")
-        print(f"Figura desada a: {output_path}")
+        print(f"Plot desat: {output_path}")
 
-    plt.show()
     plt.close()
 
 
 def plot_r_vs_K(r_final_mitja, Ks, model_type, N, errors=None, output_path=None):
-    """Grafica el valor estacionari de r en funcio de K."""
     fig, ax = plt.subplots(figsize=(8, 5))
 
     gamma = 1
@@ -397,34 +328,8 @@ def plot_r_vs_K(r_final_mitja, Ks, model_type, N, errors=None, output_path=None)
     mask = K_theory > Kc
     r_theory[mask] = np.sqrt(1 - Kc / K_theory[mask])
 
-    ax.plot(
-        K_theory,
-        r_theory,
-        linewidth=2,
-        label="Teoria",
-        alpha=0.6,
-        color="tab:green"
-    )
-
-    ax.errorbar(
-        Ks,
-        r_final_mitja,
-        yerr=errors,
-
-        fmt='o',
-        ms=6,
-
-        linestyle='--',
-        lw=1.8,
-
-        capsize=3,
-        capthick=1,
-        elinewidth=1,
-
-        color='tab:orange',
-
-        label="Simulació"
-    )
+    ax.plot(K_theory, r_theory, linewidth=2, label="Teoria", alpha=0.6, color="tab:green")
+    ax.errorbar(Ks, r_final_mitja, yerr=errors, fmt='o', ms=6, linestyle='--', lw=1.8, capsize=3, capthick=1, elinewidth=1, color='tab:orange', label="Simulació")
 
     ax.set_xlabel(r"$K$")
     ax.set_ylabel(r"$r$")
@@ -436,77 +341,30 @@ def plot_r_vs_K(r_final_mitja, Ks, model_type, N, errors=None, output_path=None)
     ax.set_xlim(0, max(Ks))
     ax.set_ylim(0, 1.05)
 
-    ax.legend(
-        bbox_to_anchor=(1.02, 1),
-        loc="upper left",
-        borderaxespad=0,
-        fontsize=9
-    )        
+    ax.legend(bbox_to_anchor=(1.02, 1), loc="upper left", borderaxespad=0, fontsize=9)
     ax.grid(alpha=0.3)
 
-    axins = inset_axes(
-        ax,
-        width="38%",
-        height="38%",
-        loc="lower right",
-        bbox_to_anchor=(0, 0.08, 1, 1),
-        bbox_transform=ax.transAxes,
-        borderpad=1.2
-    )
-
-    axins.plot(
-        K_theory,
-        r_theory,
-        linewidth=2,
-        alpha=0.6,
-        color="tab:green"
-    )
-
-    axins.errorbar(
-        Ks,
-        r_final_mitja,
-        yerr=errors,
-
-        fmt='o',
-        ms=4,
-
-        linestyle='--',
-        lw=1.2,
-
-        capsize=2,
-        capthick=0.8,
-        elinewidth=0.8,
-
-        color='tab:orange'
-    )
+    axins = inset_axes(ax, width="38%", height="38%", loc="lower right", bbox_to_anchor=(0, 0.08, 1, 1), bbox_transform=ax.transAxes, borderpad=1.2)
+    axins.plot(K_theory, r_theory, linewidth=2, alpha=0.6, color="tab:green")
+    axins.errorbar(Ks, r_final_mitja, yerr=errors, fmt='o', ms=4, linestyle='--', lw=1.2, capsize=2, capthick=0.8, elinewidth=0.8, color='tab:orange')
 
     axins.set_xlim(0, 3.2)
     axins.set_ylim(0, 0.8)
     axins.grid(alpha=0.25)
     axins.tick_params(labelsize=8)
 
-    mark_inset(
-        ax,
-        axins,
-        loc1=2,
-        loc2=4,
-        fc="none",
-        ec="0.5",
-        linewidth=1
-    )
+    mark_inset(ax, axins, loc1=2, loc2=4, fc="none", ec="0.5", linewidth=1)
 
     if output_path is not None:
         plt.savefig(output_path, dpi=300, bbox_inches="tight")
-        print(f"  Figura desada a: {output_path}")
+        print(f"Plot desat: {output_path}")
 
-    plt.show()
     plt.close()
 
 
 def plot_r_vs_t(r_hists_mig, model_type, N, output_path=None,
                 t_convs=None, T_plot=None, K_convergencia_min=None,
                 r_hists_std=None, h=0.01):
-    """Grafica l'evolucio temporal r(t) per als valors de K seleccionats."""
     fig, ax = plt.subplots(figsize=(10, 5), constrained_layout=True)
 
     if r_hists_std is None:
@@ -532,47 +390,25 @@ def plot_r_vs_t(r_hists_mig, model_type, N, output_path=None,
 
         label = f"K={K}"
         if t_conv is not None and np.isfinite(t_conv):
-            label += fr", $\langle t_c\rangle$={t_conv:.2f}s"
+            label += fr", $t_c$={t_conv:.2f}s"
 
         line, = ax.plot(t_hist, r_vals, "-", label=label)
         color = line.get_color()
 
         if r_std is not None:
-            ax.fill_between(
-                t_hist,
-                np.clip(r_vals - r_std, 0, 1.05),
-                np.clip(r_vals + r_std, 0, 1.05),
-                color=color,
-                alpha=0.14,
-                linewidth=0,
-            )
+            ax.fill_between(t_hist, np.clip(r_vals - r_std, 0, 1.05), np.clip(r_vals + r_std, 0, 1.05), color=color, alpha=0.14, linewidth=0)
 
         if model_type == "mean_field":
             gamma = 1
             Kc = 2 * gamma
             if K > Kc:
                 r_theory = np.sqrt(1 - Kc / K)
-                ax.axhline(
-                    r_theory,
-                    color=color,
-                    linestyle=":",
-                    alpha=0.55,
-                    linewidth=1.2
-                )
+                ax.axhline(r_theory, color=color, linestyle=":", alpha=0.55, linewidth=1.2)
 
         if t_conv is not None and np.isfinite(t_conv) and t_conv <= t_hist[-1]:
             r_conv = np.interp(t_conv, t_hist, r_vals)
             ax.axvline(t_conv, color=color, linestyle="--", alpha=0.25, linewidth=1)
-            ax.plot(
-                t_conv,
-                r_conv,
-                "o",
-                color=color,
-                markeredgecolor="black",
-                markeredgewidth=0.4,
-                markersize=5,
-                zorder=3
-            )
+            ax.plot(t_conv, r_conv, "o", color=color, markeredgecolor="black", markeredgewidth=0.4, markersize=5, zorder=3)
 
     ax.set_xlabel("Temps (s)")
     ax.set_ylabel("r")
@@ -580,27 +416,18 @@ def plot_r_vs_t(r_hists_mig, model_type, N, output_path=None,
     ax.grid(alpha=0.3)
     ax.set_title(fr"$N = {N}$", pad=15)
 
-    ax.legend(
-        bbox_to_anchor=(1.02, 1),
-        loc="upper left",
-        borderaxespad=0,
-        fontsize=9
-    )
+    ax.legend(bbox_to_anchor=(1.02, 1), loc="upper left", borderaxespad=0, fontsize=9)
 
     if output_path is not None:
         plt.savefig(output_path, dpi=300, bbox_inches="tight")
-        print(f"Figura desada a: {output_path}")
+        print(f"Plot desat: {output_path}")
 
-    plt.show()
     plt.close()
 
 
 def plot_t_convergencia_vs_K(Ks, t_conv_mig, t_conv_std=None, output_path=None,
                              model_type="mean_field", N=None,
                              K_convergencia_min=None):
-    """
-    Grafica el temps de convergencia mitja en funcio de K.
-    """
     Ks = np.asarray(Ks, dtype=float)
     t_conv_mig = np.asarray(t_conv_mig, dtype=float)
     t_conv_std = None if t_conv_std is None else np.asarray(t_conv_std, dtype=float)
@@ -612,67 +439,22 @@ def plot_t_convergencia_vs_K(Ks, t_conv_mig, t_conv_std=None, output_path=None,
     fig, ax = plt.subplots(figsize=(8, 5))
 
     if np.any(mask):
-        ax.errorbar(
-            Ks[mask],
-            t_conv_mig[mask],
-            yerr=None if t_conv_std is None else t_conv_std[mask],
-            fmt="o",
-            ms=4,
-            linestyle="-",
-            lw=1.5,
-            capsize=3,
-            capthick=1,
-            elinewidth=1,
-            color="tab:orange",
-            label="Simulació",
-        )
+        ax.errorbar(Ks[mask], t_conv_mig[mask], yerr=None if t_conv_std is None else t_conv_std[mask], fmt="o", ms=4, linestyle="-", lw=1.5, capsize=3, capthick=1, elinewidth=1, color="tab:orange", label="Simulació")
 
     if K_convergencia_min is not None:
-        ax.axvline(
-            K_convergencia_min,
-            color="0.35",
-            linestyle="--",
-            lw=1,
-            label=fr"$K_{{min}}={K_convergencia_min:g}$",
-        )
+        ax.axvline(K_convergencia_min, color="0.35", linestyle="--", lw=1, label=fr"$K_c={K_convergencia_min:g}$")
 
     ax.set_xlabel(r"$K$")
     ax.set_ylabel(r"$t_c$ (s)")
     ax.set_title(fr"$N={N}$" if N is not None else r"$N=10000$")
     ax.grid(alpha=0.3)
-    ax.legend(
-        bbox_to_anchor=(1.02, 1),
-        loc="upper left",
-        borderaxespad=0,
-        fontsize=9
-    )
+    ax.legend(bbox_to_anchor=(1.02, 1), loc="upper left", borderaxespad=0, fontsize=9)
     plt.tight_layout()
 
     zoom_mask = mask & (Ks >= 1.8) & (Ks <= 4.0)
     if np.any(zoom_mask):
-        axins = inset_axes(
-            ax,
-            width="38%",
-            height="38%",
-            loc="upper right",
-            bbox_to_anchor=(0, -0.04, 1, 1),
-            bbox_transform=ax.transAxes,
-            borderpad=1.2
-        )
-
-        axins.errorbar(
-            Ks[zoom_mask],
-            t_conv_mig[zoom_mask],
-            yerr=None if t_conv_std is None else t_conv_std[zoom_mask],
-            fmt="o",
-            ms=3.5,
-            linestyle="-",
-            lw=1.0,
-            capsize=2,
-            capthick=0.8,
-            elinewidth=0.8,
-            color="tab:orange",
-        )
+        axins = inset_axes(ax, width="38%", height="38%", loc="upper right", bbox_to_anchor=(0, -0.04, 1, 1), bbox_transform=ax.transAxes, borderpad=1.2)
+        axins.errorbar(Ks[zoom_mask], t_conv_mig[zoom_mask], yerr=None if t_conv_std is None else t_conv_std[zoom_mask], fmt="o", ms=3.5, linestyle="-", lw=1.0, capsize=2, capthick=0.8, elinewidth=0.8, color="tab:orange")
 
         y_vals = t_conv_mig[zoom_mask]
         if t_conv_std is not None:
@@ -691,19 +473,10 @@ def plot_t_convergencia_vs_K(Ks, t_conv_mig, t_conv_std=None, output_path=None,
         axins.grid(alpha=0.25)
         axins.tick_params(labelsize=8)
 
-        mark_inset(
-            ax,
-            axins,
-            loc1=2,
-            loc2=4,
-            fc="none",
-            ec="0.5",
-            linewidth=1
-        )
+        mark_inset(ax, axins, loc1=2, loc2=4, fc="none", ec="0.5", linewidth=1)
 
     if output_path is not None:
         plt.savefig(output_path, dpi=300, bbox_inches="tight")
-        print(f"Figura desada a: {output_path}")
+        print(f"Plot desat: {output_path}")
 
-    plt.show()
     plt.close()
